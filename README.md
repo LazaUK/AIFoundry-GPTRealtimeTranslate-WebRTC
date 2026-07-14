@@ -117,4 +117,15 @@ http://localhost:8000/static/index.html
 
 Select an output *Translate Target* from the *languages* drop-down list, click **Start Translating** and begin speaking. Click **Stop** to end the live audio session, clear the state and start a new distinct paragraph.
 
+> [!CAUTION]
+> For the time being, the retrieval of ephemeral tokens fails. 4 tried options ended with the errors shown below.
+
+``` JSON
+All mint/negotiate strategies failed:
+[MINT generic client_secrets + type:translation + audio] HTTP 400: {"error":{"code":"InvalidSessionType","message":"Session Type is invalid or not found"}}
+[MINT generic client_secrets + type:translation (bare)] HTTP 400: {"error":{"code":"InvalidSessionType","message":"Session Type is invalid or not found"}}
+[MINT translations/client_secrets + full OpenAI shape] HTTP 400: {"error":{"code":"OperationNotSupported","message":"The realtime operation does not work with the specified model. Please choose different model and try again."}}
+[MINT translations/client_secrets + type:translation] HTTP 400: {"error":{"code":"OperationNotSupported","message":"The realtime operation does not work with the specified model. Please choose different model and try again."}}
+```
+
 ![GPT-realtime-translate Demo](images/gpt-realtime-translate-demo-webrtc.png)
