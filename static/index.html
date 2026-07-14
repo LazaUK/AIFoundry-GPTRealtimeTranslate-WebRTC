@@ -1,1 +1,145 @@
-Test
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>GPT-RealTime-Translation Demo (WebRTC / SDP proxy)</title>
+    <style>
+        body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; background: #fafafa; }
+        .controls-container { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        select { padding: 10px 16px; font-size: 15px; border-radius: 6px; border: 1px solid #d1d5db; }
+        #transcript { padding: 20px; background: #fff; border: 1px solid #e1e4e8; border-radius: 12px; height: 350px; overflow-y: auto; }
+        .translation-paragraph { margin-bottom: 18px; line-height: 1.6; color: #24292e; font-size: 16px; }
+        .status { font-size: 13px; color: #6a737d; margin-bottom: 10px; white-space: pre-wrap; }
+        button { padding: 12px 24px; font-size: 16px; font-weight: 600; cursor: pointer; border-radius: 6px; border: none; color: white; }
+        #startBtn { background: #2ea44f; }
+        #stopBtn { background: #d73a49; }
+        button:disabled, select:disabled { background: #fafbfc !important; color: #959da5; border: 1px solid #e1e4e8; cursor: not-allowed; }
+    </style>
+</head>
+<body>
+    <h2>GPT-RealTime-Translation Demo (WebRTC / SDP proxy)</h2>
+
+    <div class="controls-container">
+        <label for="langSelect">Translate Target:</label>
+        <select id="langSelect">
+            <option value="es" selected>Spanish (Español)</option>
+            <option value="en">English</option>
+            <option value="fr">French (Français)</option>
+            <option value="ja">Japanese (日本語)</option>
+        </select>
+
+        <button id="startBtn">Start Translating</button>
+        <button id="stopBtn" disabled>Stop</button>
+    </div>
+
+    <div class="status" id="status">Idle.</div>
+    <div id="transcript"></div>
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+        let peerConnection;
+        let dataChannel;
+        let mediaStream;
+        let currentParagraphBlock = null;
+
+        const startBtn = document.getElementById('startBtn');
+        const stopBtn = document.getElementById('stopBtn');
+        const langSelect = document.getElementById('langSelect');
+        const transcriptDiv = document.getElementById('transcript');
+        const statusDiv = document.getElementById('status');
+        const audioElement = document.getElementById('remoteAudio');
+
+        function setStatus(text) { statusDiv.textContent = text; }
+
+        startBtn.onclick = async () => {
+            startBtn.disabled = true;
+            stopBtn.disabled = false;
+            langSelect.disabled = true;
+
+            const selectedLanguage = langSelect.value;
+
+            currentParagraphBlock = document.createElement('p');
+            currentParagraphBlock.className = 'translation-paragraph';
+            currentParagraphBlock.innerHTML = `<strong>[${selectedLanguage.toUpperCase()}] </strong>`;
+            transcriptDiv.appendChild(currentParagraphBlock);
+
+            try {
+                // 1. Mic
+                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+
+                // 2. Peer connection
+                peerConnection = new RTCPeerConnection();
+
+                peerConnection.ontrack = (event) => {
+                    audioElement.srcObject = event.streams[0];
+                };
+                peerConnection.onconnectionstatechange = () => {
+                    setStatus('WebRTC connection state: ' + peerConnection.connectionState);
+                };
+
+                mediaStream.getTracks().forEach(t => peerConnection.addTrack(t, mediaStream));
+
+                // 3. Data channel for translation events
+                dataChannel = peerConnection.createDataChannel('oai-events');
+
+                dataChannel.onopen = () => {
+                    setStatus('Data channel open - configuring target language...');
+                    dataChannel.send(JSON.stringify({
+                        type: 'session.update',
+                        session: { audio: { output: { language: selectedLanguage } } }
+                    }));
+                };
+
+                dataChannel.onmessage = (event) => {
+                    const data = JSON.parse(event.data);
+                    if (data.type === 'session.output_transcript.delta' && currentParagraphBlock) {
+                        currentParagraphBlock.appendChild(document.createTextNode(data.delta));
+                        transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+                    } else if (data.type === 'error') {
+                        setStatus('Session error: ' + (data.error?.message || JSON.stringify(data.error)));
+                        console.error('Translation session error:', data);
+                    }
+                };
+
+                // 4. SDP offer -> our backend proxy -> Azure
+                const offer = await peerConnection.createOffer();
+                await peerConnection.setLocalDescription(offer);
+
+                setStatus('Negotiating SDP via backend proxy...');
+                const sdpResponse = await fetch(`/connect?lang=${encodeURIComponent(selectedLanguage)}`, {
+                    method: 'POST',
+                    body: offer.sdp,
+                    headers: { 'Content-Type': 'application/sdp' }
+                });
+
+                if (!sdpResponse.ok) {
+                    const errText = await sdpResponse.text();
+                    setStatus('SDP negotiation failed (HTTP ' + sdpResponse.status + '):\n' + errText);
+                    stopBtn.onclick();
+                    return;
+                }
+
+                const answerSdp = await sdpResponse.text();
+                await peerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp });
+                setStatus('SDP answer applied - establishing media...');
+
+            } catch (err) {
+                setStatus('Error: ' + err.message);
+                console.error(err);
+                stopBtn.onclick();
+            }
+        };
+
+        stopBtn.onclick = () => {
+            startBtn.disabled = false;
+            stopBtn.disabled = true;
+            langSelect.disabled = false;
+
+            if (dataChannel) { dataChannel.close(); dataChannel = null; }
+            if (peerConnection) { peerConnection.close(); peerConnection = null; }
+            if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+            audioElement.srcObject = null;
+        };
+    </script>
+</body>
+</html>
