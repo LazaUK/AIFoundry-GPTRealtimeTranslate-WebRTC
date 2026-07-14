@@ -98,3 +98,23 @@ dataChannel.onmessage = (event) => {
     }
 };
 ```
+
+## Part 4: Running the Demo
+
+### 4.1 Launch the Server
+Ensure that **index.html** file is nested inside the **static/** folder alongside your **app.py** execution layer. Then launch the local app's Python stack using your terminal:
+
+``` PowerShell
+python app.py
+```
+
+### 4.2 Test Live Translation
+Open your web browser and enter the following URL:
+
+``` Plaintext
+http://localhost:8000/static/index.html
+```
+
+Select an output *translate target* from the *languages* drop-down list, click **Start Translating** and begin speaking. Click **Stop** to end the live audio session, clear the state and start a new distinct paragraph.
+
+![GPT-realtime-translate Demo](images/gpt-realtime-translate-demo-webrtc.png)
