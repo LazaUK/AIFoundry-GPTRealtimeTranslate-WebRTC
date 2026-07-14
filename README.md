@@ -115,6 +115,6 @@ Open your web browser and enter the following URL:
 http://localhost:8000/static/index.html
 ```
 
-Select an output *translate target* from the *languages* drop-down list, click **Start Translating** and begin speaking. Click **Stop** to end the live audio session, clear the state and start a new distinct paragraph.
+Select an output *Translate Target* from the *languages* drop-down list, click **Start Translating** and begin speaking. Click **Stop** to end the live audio session, clear the state and start a new distinct paragraph.
 
 ![GPT-realtime-translate Demo](images/gpt-realtime-translate-demo-webrtc.png)
