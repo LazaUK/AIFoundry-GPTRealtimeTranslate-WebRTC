@@ -3,7 +3,7 @@
 This repo demonstrates how to use the **gpt-realtime-translate** model in Microsoft Foundry with a server-side *WebRTC* SDP Proxy (in Python) and secure *Entra ID* authentication.
 
 > [!CAUTION]
-> This repo is provided to reproduce observed issue. DON'T USE IT FOR YOUR LOCAL IMPLEMENTATION YET!!
+> This repo is provided to reproduce the observed issue. DON'T USE IT FOR YOUR LOCAL IMPLEMENTATION YET!!
 
 ## 📑 Table of Contents:
 - [Part 1: Configuring Solution Environment](#part-1-configuring-solution-environment)
