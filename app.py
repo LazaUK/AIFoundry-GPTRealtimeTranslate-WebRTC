@@ -14,7 +14,7 @@ FOUNDRY_DEPLOYMENT_NAME = os.getenv("FOUNDRY_DEPLOYMENT_NAME", "gpt-realtime-tra
 
 token_provider = get_bearer_token_provider(
     DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default"
+    "https://ai.azure.com/.default"
 )
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
