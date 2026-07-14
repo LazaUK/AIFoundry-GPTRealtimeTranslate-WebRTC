@@ -42,3 +42,31 @@ Install the necessary Python packages:
 ``` Python
 pip install fastapi uvicorn httpx azure-identity
 ```
+
+## Part 2: Backend Implementation
+The **app.py** file acts as an intermediate proxy between your client browser and Microsoft Foundry. This implementation utilises *WebRTC* instead of raw *WebSockets*, and enables a fallback authentication.
+
+First, it obtains your *Entra ID* token:
+
+``` Python
+token_provider = get_bearer_token_provider(
+    DefaultAzureCredential(),
+    "https://cognitiveservices.azure.com/.default"
+)
+```
+
+Rather than forcing the browser to manage API keys or ephemeral token paths, the backend exposes a single `/connect` route. When called, it loops through a matrix of session shapes (`mint_variants`) to fetch a short-lived token from Azure's GA endpoints:
+
+``` Python
+sdp_resp = await client.post(
+    calls_url,
+    headers={
+        "Authorization": f"Bearer {ephemeral}",
+        "Content-Type": "application/sdp",
+    },
+    content=sdp_offer,
+)
+```
+
+This keeps your credentials on the server side and streams the negotiated SDP connection back to the client.
+
