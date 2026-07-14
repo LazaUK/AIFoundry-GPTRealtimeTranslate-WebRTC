@@ -36,7 +36,7 @@ Configure the following environment variables in your operating system:
 | FOUNDRY_RESOURCE_NAME   | The sub-domain name of your Foundry resource.             |
 | FOUNDRY_DEPLOYMENT_NAME | The exact name of your gpt-realtime-translate deployment. |
 
-1.4 Installation
+### 1.4 Installation
 Install the necessary Python packages:
 
 ``` Python
@@ -70,3 +70,31 @@ sdp_resp = await client.post(
 
 This keeps your credentials on the server side and streams the negotiated SDP connection back to the client.
 
+## Part 3: Frontend UI
+The **static/index.html** file manages the native browser *WebRTC* handshake. Instead of raw downsampling and manual audio-chunk packetizing, WebRTC utilizes your browser's native media pipelines.
+
+The application captures your microphone stream and binds it directly to the peer connection:
+
+``` Python
+mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+mediaStream.getTracks().forEach(t => peerConnection.addTrack(t, mediaStream));
+```
+
+It establishes a WebRTC `RTCPeerConnection` and automatically pipes the remote translated voice track directly into an HTML5 `<audio>` element:
+
+``` Python
+peerConnection.ontrack = (event) => {
+    audioElement.srcObject = event.streams[0];
+};
+```
+
+Text transcripts are handled over an `oai-events` WebRTC data channel, appending translation deltas into your workspace on the fly:
+
+``` Python
+dataChannel.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    if (data.type === 'session.output_transcript.delta' && currentParagraphBlock) {
+        currentParagraphBlock.appendChild(document.createTextNode(data.delta));
+    }
+};
+```
