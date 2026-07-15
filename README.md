@@ -121,11 +121,34 @@ Select an output *Translate Target* from the *languages* drop-down list, click *
 > For the time being, the retrieval of ephemeral tokens fails. 4 tried options ended with the errors shown below.
 
 ``` JSON
-All mint/negotiate strategies failed:
-[MINT generic client_secrets + type:translation + audio] HTTP 400: {"error":{"code":"InvalidSessionType","message":"Session Type is invalid or not found"}}
-[MINT generic client_secrets + type:translation (bare)] HTTP 400: {"error":{"code":"InvalidSessionType","message":"Session Type is invalid or not found"}}
-[MINT translations/client_secrets + full OpenAI shape] HTTP 400: {"error":{"code":"OperationNotSupported","message":"The realtime operation does not work with the specified model. Please choose different model and try again."}}
-[MINT translations/client_secrets + type:translation] HTTP 400: {"error":{"code":"OperationNotSupported","message":"The realtime operation does not work with the specified model. Please choose different model and try again."}}
+[oai-session FULL] session.updated {
+  "type": "transcription",
+  "object": "realtime.transcription_session",
+  "id": "sess_E1hxrL4ySGSTw3Zt2eoXT",
+  "expires_at": 1784079636,
+  "audio": {
+    "input": {
+      "format": {
+        "type": "audio/pcm",
+        "rate": 24000
+      },
+      "transcription": {
+        "model": "gpt-realtime-translate",
+        "language": null,
+        "prompt": null
+      },
+      "noise_reduction": null,
+      "turn_detection": {
+        "type": "server_vad",
+        "threshold": 0.5,
+        "prefix_padding_ms": 300,
+        "silence_duration_ms": 200
+      }
+    }
+  },
+  "include": null
+}
+index.html:160 [oai-event] input_audio_buffer.speech_started {type: 'input_audio_buffer.speech_started', event_id: 'event_E1hxvJRDnBEhGJblthyi9', audio_start_ms: 2420, item_id: 'item_E1hxv23IfIQRW7H1qyYfZ'}
 ```
 
 ![GPT-realtime-translate Demo](images/gpt-realtime-translate-demo-webrtc.png)
