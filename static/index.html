@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>GPT-RealTime-Translation Demo (WebRTC / SDP proxy)</title>
+    <title>GPT-Realtime Translation (WebRTC / SDP proxy)</title>
     <style>
         body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; background: #fafafa; }
         .controls-container { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
@@ -17,7 +17,7 @@
     </style>
 </head>
 <body>
-    <h2>GPT-RealTime-Translation Demo (WebRTC / SDP proxy)</h2>
+    <h2>GPT-Realtime Translation (WebRTC, SDP proxied via backend)</h2>
 
     <div class="controls-container">
         <label for="langSelect">Translate Target:</label>
@@ -34,20 +34,20 @@
 
     <div class="status" id="status">Idle.</div>
     <div id="transcript"></div>
-    <audio id="remoteAudio" autoplay></audio>
+    <!-- No <audio> element: gpt-realtime-translate outputs text only -->
 
     <script>
         let peerConnection;
         let dataChannel;
         let mediaStream;
         let currentParagraphBlock = null;
+        let modelDeployment = null;
 
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const langSelect = document.getElementById('langSelect');
         const transcriptDiv = document.getElementById('transcript');
         const statusDiv = document.getElementById('status');
-        const audioElement = document.getElementById('remoteAudio');
 
         function setStatus(text) { statusDiv.textContent = text; }
 
@@ -70,9 +70,6 @@
                 // 2. Peer connection
                 peerConnection = new RTCPeerConnection();
 
-                peerConnection.ontrack = (event) => {
-                    audioElement.srcObject = event.streams[0];
-                };
                 peerConnection.onconnectionstatechange = () => {
                     setStatus('WebRTC connection state: ' + peerConnection.connectionState);
                 };
@@ -83,21 +80,55 @@
                 dataChannel = peerConnection.createDataChannel('oai-events');
 
                 dataChannel.onopen = () => {
-                    setStatus('Data channel open - configuring target language...');
+                    setStatus('Data channel open - binding model...');
                     dataChannel.send(JSON.stringify({
                         type: 'session.update',
-                        session: { audio: { output: { language: selectedLanguage } } }
+                        session: {
+                            type: 'transcription',
+                            audio: {
+                                input: {
+                                    format: { type: 'audio/pcm', rate: 24000 },
+                                    transcription: {
+                                        model: modelDeployment
+                                    }
+                                }
+                            }
+                        }
                     }));
                 };
 
                 dataChannel.onmessage = (event) => {
                     const data = JSON.parse(event.data);
-                    if (data.type === 'session.output_transcript.delta' && currentParagraphBlock) {
+
+                    // This model outputs TEXT ONLY. Deltas carry .delta;
+                    // completion events carry .transcript or .text.
+                    const textDeltaEvents = [
+                        'response.text.delta',
+                        'session.output_transcript.delta',
+                        'conversation.item.input_audio_transcription.delta',
+                        'response.output_audio_transcript.delta'
+                    ];
+                    const textDoneEvents = [
+                        'conversation.item.input_audio_transcription.completed',
+                        'response.text.done'
+                    ];
+
+                    if (textDeltaEvents.includes(data.type) && currentParagraphBlock) {
                         currentParagraphBlock.appendChild(document.createTextNode(data.delta));
                         transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+                    } else if (textDoneEvents.includes(data.type) && currentParagraphBlock) {
+                        const finalText = data.transcript || data.text || '';
+                        if (finalText) {
+                            currentParagraphBlock.appendChild(document.createTextNode(finalText + ' '));
+                            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
+                        }
                     } else if (data.type === 'error') {
                         setStatus('Session error: ' + (data.error?.message || JSON.stringify(data.error)));
-                        console.error('Translation session error:', data);
+                        console.error('[oai-error FULL]', JSON.stringify(data, null, 2));
+                    } else if (data.type === 'session.created' || data.type === 'session.updated') {
+                        console.log('[oai-session FULL]', data.type, JSON.stringify(data.session, null, 2));
+                    } else {
+                        console.log('[oai-event]', data.type, data);
                     }
                 };
 
@@ -106,7 +137,7 @@
                 await peerConnection.setLocalDescription(offer);
 
                 setStatus('Negotiating SDP via backend proxy...');
-                const sdpResponse = await fetch(`/connect?lang=${encodeURIComponent(selectedLanguage)}`, {
+                const sdpResponse = await fetch('/connect', {
                     method: 'POST',
                     body: offer.sdp,
                     headers: { 'Content-Type': 'application/sdp' }
@@ -120,6 +151,7 @@
                 }
 
                 const answerSdp = await sdpResponse.text();
+                modelDeployment = sdpResponse.headers.get('X-Model-Deployment');
                 await peerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp });
                 setStatus('SDP answer applied - establishing media...');
 
@@ -138,7 +170,6 @@
             if (dataChannel) { dataChannel.close(); dataChannel = null; }
             if (peerConnection) { peerConnection.close(); peerConnection = null; }
             if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
-            audioElement.srcObject = null;
         };
     </script>
 </body>
