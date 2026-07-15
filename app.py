@@ -1,5 +1,4 @@
 import os
-import json
 import httpx
 import uvicorn
 from fastapi import FastAPI, HTTPException, Request
@@ -21,131 +20,117 @@ app.mount("/static", StaticFiles(directory="static"), name="static")
 
 BASE = f"https://{FOUNDRY_RESOURCE_NAME}.openai.azure.com/openai/v1"
 
+# Working recipe for gpt-realtime-translate over WebRTC (verified July 2026):
+#
+#   1. Mint an ephemeral token at /realtime/client_secrets with session type
+#      "transcription" (GA supports only "realtime" and "transcription";
+#      "translation" is not a registered session type). The deployment name
+#      goes at session.audio.input.transcription.model - NOT session.model,
+#      which the transcription schema rejects as an unknown parameter.
+#
+#   2. POST the browser's SDP offer to /realtime/calls with the ephemeral
+#      token. Do NOT append ?model=... - the model is already bound to the
+#      token, and re-specifying it makes the endpoint return HTTP 400.
+#
+#   3. Target output language is configured by the browser after connection,
+#      via a session.update event on the "oai-events" data channel.
 
-def mint_variants(lang: str):
-    """Ephemeral-token minting attempts, in order of likelihood.
+MINT_URL = f"{BASE}/realtime/client_secrets"
 
-    Key insight from previous rounds:
-      - /calls endpoints exist and demand ephemeral tokens (401, not 404)
-      - client_secrets with type:"realtime" -> 400 (correct: not a realtime-type model)
-      - client_secrets with no type       -> 400 (likely defaulted to realtime)
-      - NEVER YET TRIED: explicit type:"translation" (OpenAI's documented
-        session type for translation sessions)
-    """
-    full_audio = {"output": {"language": lang}}
-    return [
-        (
-            "generic client_secrets + type:translation + audio",
-            f"{BASE}/realtime/client_secrets",
-            {"session": {"type": "translation", "model": FOUNDRY_DEPLOYMENT_NAME, "audio": full_audio}},
-        ),
-        (
-            "generic client_secrets + type:translation (bare)",
-            f"{BASE}/realtime/client_secrets",
-            {"session": {"type": "translation", "model": FOUNDRY_DEPLOYMENT_NAME}},
-        ),
-        (
-            "translations/client_secrets + full OpenAI shape",
-            f"{BASE}/realtime/translations/client_secrets",
-            {"session": {"model": FOUNDRY_DEPLOYMENT_NAME, "audio": full_audio}},
-        ),
-        (
-            "translations/client_secrets + type:translation",
-            f"{BASE}/realtime/translations/client_secrets",
-            {"session": {"type": "translation", "model": FOUNDRY_DEPLOYMENT_NAME, "audio": full_audio}},
-        ),
-    ]
-
-
-CALLS_URLS = [
-    ("translations/calls", f"{BASE}/realtime/translations/calls?model={FOUNDRY_DEPLOYMENT_NAME}"),
-    ("realtime/calls", f"{BASE}/realtime/calls?model={FOUNDRY_DEPLOYMENT_NAME}"),
+# Doc-aligned hypothesis (WebSocket guide, current): Azure binds transcription/
+# translation MODELS in the connection URL, not the session payload -
+#   transcription WS: /openai/v1/realtime?intent=transcription
+#   translation WS:   /openai/v1/realtime/translations?model=<deployment>
+# with target language set post-connect via session.update.
+# WebRTC analog: mint a bare token (no model), bind the model at
+# translations/calls?model=..., configure language over the data channel.
+# Previous run proved: embedding the translate model as the transcription
+# model in the token runs the TRANSCRIPTION pipeline, which this model
+# rejects per item (it translates; it doesn't transcribe).
+MINT_PAYLOADS = [
+    # Bare token only. Binding the model at mint time proved to hard-wire the
+    # transcription pipeline against it (per-item OperationNotSupported).
+    # The model is now bound POST-CONNECT via session.update over the data
+    # channel, matching the documented transcription WebSocket sample.
+    ("bare transcription token (no model)",
+     {"session": {"type": "transcription"}}),
 ]
 
-
-def extract_ephemeral(data: dict):
-    """GA responses put the token at top-level 'value'; some variants nest it
-    under client_secret.value. Accept either."""
-    if isinstance(data.get("value"), str) and data["value"]:
-        return data["value"]
-    cs = data.get("client_secret")
-    if isinstance(cs, dict) and isinstance(cs.get("value"), str):
-        return cs["value"]
-    if isinstance(cs, str) and cs:
-        return cs
-    return None
+CALLS_URLS = [
+    # NOTE: ?model=<deployment> on calls endpoints returns HTTP 400 (empty
+    # error body) with BOTH model-bound and modelless tokens - proven twice.
+    # WebRTC calls endpoints do not accept URL model binding; removed.
+    ("translations/calls (bare)", f"{BASE}/realtime/translations/calls"),
+    ("realtime/calls (bare)", f"{BASE}/realtime/calls"),
+]
 
 
 @app.post("/connect", response_class=PlainTextResponse)
 async def connect(request: Request):
-    """Mint an ephemeral token (trying several session shapes), then negotiate
-    the browser's SDP offer against Azure's calls endpoint with that token.
-    Returns the SDP answer, or a 502 with the full diagnostic matrix."""
+    """Mint an ephemeral token, then negotiate the browser's SDP offer with
+    Azure. Returns the SDP answer (application/sdp). The browser never holds
+    any long-lived credential."""
     sdp_offer = (await request.body()).decode("utf-8")
-    lang = request.query_params.get("lang", "es")
 
     try:
         entra_token = token_provider()
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Entra auth failed: {e}")
 
-    diagnostics = []
-
     async with httpx.AsyncClient(timeout=30) as client:
-        for mint_label, mint_url, payload in mint_variants(lang):
-            try:
-                mint_resp = await client.post(
-                    mint_url,
-                    headers={
-                        "Authorization": f"Bearer {entra_token}",
-                        "Content-Type": "application/json",
-                    },
-                    json=payload,
-                )
-            except Exception as e:
-                diagnostics.append(f"[MINT {mint_label}] transport error: {e}")
-                continue
-
+        failures = []
+        for mint_label, payload in MINT_PAYLOADS:
+            # Step 1: ephemeral token
+            mint_resp = await client.post(
+                MINT_URL,
+                headers={
+                    "Authorization": f"Bearer {entra_token}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
             if mint_resp.status_code != 200:
                 snippet = mint_resp.text[:300].replace("\n", " ")
-                diagnostics.append(f"[MINT {mint_label}] HTTP {mint_resp.status_code}: {snippet}")
+                failures.append(f"[MINT {mint_label}] HTTP {mint_resp.status_code}: {snippet}")
                 print(f"--- mint failed: [{mint_label}] HTTP {mint_resp.status_code} ---")
                 print(mint_resp.text[:500])
                 continue
 
             data = mint_resp.json()
-            ephemeral = extract_ephemeral(data)
+            ephemeral = data.get("value") or (data.get("client_secret") or {}).get("value")
             if not ephemeral:
-                diagnostics.append(f"[MINT {mint_label}] 200 OK but no token in response: {json.dumps(data)[:300]}")
+                failures.append(f"[MINT {mint_label}] 200 OK but no token: {mint_resp.text[:300]}")
                 continue
 
-            print(f"--- EPHEMERAL TOKEN MINTED via: {mint_label} ---")
+            print(f"--- EPHEMERAL TOKEN MINTED via: [{mint_label}] ---")
 
-            # Token in hand: negotiate SDP with it.
+            # Step 2: SDP negotiation
             for calls_label, calls_url in CALLS_URLS:
-                try:
-                    sdp_resp = await client.post(
-                        calls_url,
-                        headers={
-                            "Authorization": f"Bearer {ephemeral}",
-                            "Content-Type": "application/sdp",
-                        },
-                        content=sdp_offer,
-                    )
-                except Exception as e:
-                    diagnostics.append(f"[SDP {calls_label} after {mint_label}] transport error: {e}")
-                    continue
-
+                sdp_resp = await client.post(
+                    calls_url,
+                    headers={
+                        "Authorization": f"Bearer {ephemeral}",
+                        "Content-Type": "application/sdp",
+                    },
+                    content=sdp_offer,
+                )
                 if sdp_resp.status_code in (200, 201):
-                    print(f"--- SDP NEGOTIATION SUCCEEDED: mint=[{mint_label}] calls=[{calls_label}] ---")
-                    return PlainTextResponse(sdp_resp.text, media_type="application/sdp")
+                    print(f"--- SDP SUCCEEDED: mint=[{mint_label}] calls=[{calls_label}] ---")
+                    # Expose the deployment name so the browser can bind the
+                    # model post-connect via session.update (documented pattern
+                    # in the transcription WebSocket sample).
+                    return PlainTextResponse(
+                        sdp_resp.text,
+                        media_type="application/sdp",
+                        headers={"X-Model-Deployment": FOUNDRY_DEPLOYMENT_NAME},
+                    )
 
                 snippet = sdp_resp.text[:300].replace("\n", " ")
-                diagnostics.append(f"[SDP {calls_label} after {mint_label}] HTTP {sdp_resp.status_code}: {snippet}")
+                failures.append(f"[SDP {calls_label} after {mint_label}] HTTP {sdp_resp.status_code}: {snippet}")
                 print(f"--- SDP failed: [{calls_label}] HTTP {sdp_resp.status_code} ---")
                 print(sdp_resp.text[:500])
 
-    detail = "All mint/negotiate strategies failed:\n" + "\n".join(diagnostics)
+    detail = "All mint/negotiate strategies failed:\n" + "\n".join(failures)
     print("─" * 60)
     print(detail)
     print("─" * 60)
