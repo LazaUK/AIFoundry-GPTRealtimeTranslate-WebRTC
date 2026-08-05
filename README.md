@@ -51,11 +51,11 @@ First, it obtains your *Entra ID* token:
 ``` Python
 token_provider = get_bearer_token_provider(
     DefaultAzureCredential(),
-    "https://cognitiveservices.azure.com/.default"
+    "https://ai.azure.com/.default"
 )
 ```
 
-Rather than forcing the browser to manage API keys or ephemeral token paths, the backend exposes a single `/connect` route. When called, it loops through a matrix of session shapes (`mint_variants`) to fetch a short-lived token from Azure's GA endpoints:
+Rather than forcing the browser to manage API keys or ephemeral token paths, the backend exposes a single `/connect` route. When called, it first mints a short-lived ephemeral token from Azure's endpoint, and then exchanges the browser's SDP offer:
 
 ``` Python
 sdp_resp = await client.post(
@@ -88,7 +88,7 @@ peerConnection.ontrack = (event) => {
 };
 ```
 
-Text transcripts are handled over an `oai-events` WebRTC data channel, appending translation deltas into your workspace on the fly:
+Text transcripts are handled over a `realtime-channel` WebRTC data channel:
 
 ``` Python
 dataChannel.onmessage = (event) => {
@@ -116,39 +116,5 @@ http://localhost:8000/static/index.html
 ```
 
 Select an output *Translate Target* from the *languages* drop-down list, click **Start Translating** and begin speaking. Click **Stop** to end the live audio session, clear the state and start a new distinct paragraph.
-
-> [!CAUTION]
-> For the time being, WebRTC based interactions fail.
-
-``` JSON
-[oai-session FULL] session.updated {
-  "type": "transcription",
-  "object": "realtime.transcription_session",
-  "id": "sess_E1hxrL4ySGSTw3Zt2eoXT",
-  "expires_at": 1784079636,
-  "audio": {
-    "input": {
-      "format": {
-        "type": "audio/pcm",
-        "rate": 24000
-      },
-      "transcription": {
-        "model": "gpt-realtime-translate",
-        "language": null,
-        "prompt": null
-      },
-      "noise_reduction": null,
-      "turn_detection": {
-        "type": "server_vad",
-        "threshold": 0.5,
-        "prefix_padding_ms": 300,
-        "silence_duration_ms": 200
-      }
-    }
-  },
-  "include": null
-}
-index.html:160 [oai-event] input_audio_buffer.speech_started {type: 'input_audio_buffer.speech_started', event_id: 'event_E1hxvJRDnBEhGJblthyi9', audio_start_ms: 2420, item_id: 'item_E1hxv23IfIQRW7H1qyYfZ'}
-```
 
 ![GPT-realtime-translate Demo](images/gpt-realtime-translate-demo-webrtc.png)
