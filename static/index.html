@@ -2,14 +2,13 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>GPT-Realtime Translation (WebRTC / SDP proxy)</title>
+    <title>GPT-realtime-translate (WebRTC)</title>
     <style>
         body { font-family: system-ui, sans-serif; max-width: 700px; margin: 40px auto; padding: 20px; background: #fafafa; }
-        .controls-container { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
+        .controls { display: flex; align-items: center; gap: 15px; margin-bottom: 20px; }
         select { padding: 10px 16px; font-size: 15px; border-radius: 6px; border: 1px solid #d1d5db; }
-        #transcript { padding: 20px; background: #fff; border: 1px solid #e1e4e8; border-radius: 12px; height: 350px; overflow-y: auto; }
-        .translation-paragraph { margin-bottom: 18px; line-height: 1.6; color: #24292e; font-size: 16px; }
-        .status { font-size: 13px; color: #6a737d; margin-bottom: 10px; white-space: pre-wrap; }
+        #transcript { padding: 20px; background: #fff; border: 1px solid #e1e4e8; border-radius: 12px; height: 350px; overflow-y: auto; line-height: 1.6; font-size: 16px; color: #24292e; }
+        .status { font-size: 13px; color: #6a737d; margin-bottom: 10px; }
         button { padding: 12px 24px; font-size: 16px; font-weight: 600; cursor: pointer; border-radius: 6px; border: none; color: white; }
         #startBtn { background: #2ea44f; }
         #stopBtn { background: #d73a49; }
@@ -17,146 +16,86 @@
     </style>
 </head>
 <body>
-    <h2>GPT-Realtime Translation (WebRTC, SDP proxied via backend)</h2>
+    <h2>GPT-realtime-translate (WebRTC)</h2>
+    <p class="status">Speak any language. The model translates into the target language below and speaks it back.</p>
 
-    <div class="controls-container">
+    <div class="controls">
         <label for="langSelect">Translate Target:</label>
         <select id="langSelect">
             <option value="es" selected>Spanish (Español)</option>
             <option value="en">English</option>
             <option value="fr">French (Français)</option>
             <option value="ja">Japanese (日本語)</option>
+            <option value="pt">Portuguese (Português)</option>
+            <option value="ru">Russian (Русский)</option>
+            <option value="zh">Chinese (中文)</option>
+            <option value="de">German (Deutsch)</option>
+            <option value="ko">Korean (한국어)</option>
+            <option value="hi">Hindi (हिन्दी)</option>
+            <option value="id">Indonesian (Bahasa Indonesia)</option>
+            <option value="vi">Vietnamese (Tiếng Việt)</option>
+            <option value="it">Italian (Italiano)</option>
         </select>
-
         <button id="startBtn">Start Translating</button>
         <button id="stopBtn" disabled>Stop</button>
     </div>
 
     <div class="status" id="status">Idle.</div>
     <div id="transcript"></div>
-    <!-- No <audio> element: gpt-realtime-translate outputs text only -->
+    <audio id="translatedAudio" autoplay></audio>
 
     <script>
-        let peerConnection;
-        let dataChannel;
-        let mediaStream;
-        let currentParagraphBlock = null;
-        let modelDeployment = null;
+        let pc, stream;
 
         const startBtn = document.getElementById('startBtn');
         const stopBtn = document.getElementById('stopBtn');
         const langSelect = document.getElementById('langSelect');
-        const transcriptDiv = document.getElementById('transcript');
-        const statusDiv = document.getElementById('status');
-
-        function setStatus(text) { statusDiv.textContent = text; }
+        const transcript = document.getElementById('transcript');
+        const status = document.getElementById('status');
+        const audioEl = document.getElementById('translatedAudio');
 
         startBtn.onclick = async () => {
             startBtn.disabled = true;
             stopBtn.disabled = false;
             langSelect.disabled = true;
-
-            const selectedLanguage = langSelect.value;
-
-            currentParagraphBlock = document.createElement('p');
-            currentParagraphBlock.className = 'translation-paragraph';
-            currentParagraphBlock.innerHTML = `<strong>[${selectedLanguage.toUpperCase()}] </strong>`;
-            transcriptDiv.appendChild(currentParagraphBlock);
+            transcript.textContent = '';
 
             try {
-                // 1. Mic
-                mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                pc = new RTCPeerConnection();
+                pc.onconnectionstatechange = () => status.textContent = 'Connection: ' + pc.connectionState;
 
-                // 2. Peer connection
-                peerConnection = new RTCPeerConnection();
+                // Play the translated speech.
+                pc.ontrack = (e) => audioEl.srcObject = e.streams[0];
+                pc.addTrack(stream.getAudioTracks()[0], stream);
 
-                peerConnection.onconnectionstatechange = () => {
-                    setStatus('WebRTC connection state: ' + peerConnection.connectionState);
-                };
-
-                mediaStream.getTracks().forEach(t => peerConnection.addTrack(t, mediaStream));
-
-                // 3. Data channel for translation events
-                dataChannel = peerConnection.createDataChannel('oai-events');
-
-                dataChannel.onopen = () => {
-                    setStatus('Data channel open - binding model...');
-                    dataChannel.send(JSON.stringify({
-                        type: 'session.update',
-                        session: {
-                            type: 'transcription',
-                            audio: {
-                                input: {
-                                    format: { type: 'audio/pcm', rate: 24000 },
-                                    transcription: {
-                                        model: modelDeployment
-                                    }
-                                }
-                            }
-                        }
-                    }));
-                };
-
-                dataChannel.onmessage = (event) => {
-                    const data = JSON.parse(event.data);
-
-                    // This model outputs TEXT ONLY. Deltas carry .delta;
-                    // completion events carry .transcript or .text.
-                    const textDeltaEvents = [
-                        'response.text.delta',
-                        'session.output_transcript.delta',
-                        'conversation.item.input_audio_transcription.delta',
-                        'response.output_audio_transcript.delta'
-                    ];
-                    const textDoneEvents = [
-                        'conversation.item.input_audio_transcription.completed',
-                        'response.text.done'
-                    ];
-
-                    if (textDeltaEvents.includes(data.type) && currentParagraphBlock) {
-                        currentParagraphBlock.appendChild(document.createTextNode(data.delta));
-                        transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
-                    } else if (textDoneEvents.includes(data.type) && currentParagraphBlock) {
-                        const finalText = data.transcript || data.text || '';
-                        if (finalText) {
-                            currentParagraphBlock.appendChild(document.createTextNode(finalText + ' '));
-                            transcriptDiv.scrollTop = transcriptDiv.scrollHeight;
-                        }
-                    } else if (data.type === 'error') {
-                        setStatus('Session error: ' + (data.error?.message || JSON.stringify(data.error)));
-                        console.error('[oai-error FULL]', JSON.stringify(data, null, 2));
-                    } else if (data.type === 'session.created' || data.type === 'session.updated') {
-                        console.log('[oai-session FULL]', data.type, JSON.stringify(data.session, null, 2));
-                    } else {
-                        console.log('[oai-event]', data.type, data);
+                // Translation events arrive on this data channel.
+                const channel = pc.createDataChannel('realtime-channel');
+                channel.onmessage = (e) => {
+                    const msg = JSON.parse(e.data);
+                    if (msg.type === 'session.output_transcript.delta') {
+                        transcript.textContent += msg.delta;
+                        transcript.scrollTop = transcript.scrollHeight;
+                    } else if (msg.type === 'error') {
+                        status.textContent = 'Error: ' + (msg.error?.message || '');
+                        console.error(msg);
                     }
                 };
 
-                // 4. SDP offer -> our backend proxy -> Azure
-                const offer = await peerConnection.createOffer();
-                await peerConnection.setLocalDescription(offer);
+                await pc.setLocalDescription(await pc.createOffer());
 
-                setStatus('Negotiating SDP via backend proxy...');
-                const sdpResponse = await fetch('/connect', {
+                status.textContent = 'Connecting...';
+                const res = await fetch('/connect?language=' + langSelect.value, {
                     method: 'POST',
-                    body: offer.sdp,
-                    headers: { 'Content-Type': 'application/sdp' }
+                    headers: { 'Content-Type': 'application/sdp' },
+                    body: pc.localDescription.sdp
                 });
+                if (!res.ok) throw new Error(await res.text());
 
-                if (!sdpResponse.ok) {
-                    const errText = await sdpResponse.text();
-                    setStatus('SDP negotiation failed (HTTP ' + sdpResponse.status + '):\n' + errText);
-                    stopBtn.onclick();
-                    return;
-                }
-
-                const answerSdp = await sdpResponse.text();
-                modelDeployment = sdpResponse.headers.get('X-Model-Deployment');
-                await peerConnection.setRemoteDescription({ type: 'answer', sdp: answerSdp });
-                setStatus('SDP answer applied - establishing media...');
-
+                await pc.setRemoteDescription({ type: 'answer', sdp: await res.text() });
+                status.textContent = 'Connected - start speaking.';
             } catch (err) {
-                setStatus('Error: ' + err.message);
+                status.textContent = 'Error: ' + err.message;
                 console.error(err);
                 stopBtn.onclick();
             }
@@ -166,10 +105,10 @@
             startBtn.disabled = false;
             stopBtn.disabled = true;
             langSelect.disabled = false;
-
-            if (dataChannel) { dataChannel.close(); dataChannel = null; }
-            if (peerConnection) { peerConnection.close(); peerConnection = null; }
-            if (mediaStream) { mediaStream.getTracks().forEach(t => t.stop()); mediaStream = null; }
+            if (pc) { pc.close(); pc = null; }
+            if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+            audioEl.srcObject = null;
+            status.textContent = 'Stopped.';
         };
     </script>
 </body>
