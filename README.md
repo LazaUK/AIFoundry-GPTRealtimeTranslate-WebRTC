@@ -58,13 +58,11 @@ token_provider = get_bearer_token_provider(
 Rather than forcing the browser to manage API keys or ephemeral token paths, the backend exposes a single `/connect` route. When called, it first mints a short-lived ephemeral token from Azure's endpoint, and then exchanges the browser's SDP offer:
 
 ``` Python
-sdp_resp = await client.post(
-    calls_url,
-    headers={
-        "Authorization": f"Bearer {ephemeral}",
-        "Content-Type": "application/sdp",
-    },
-    content=sdp_offer,
+answer = await client.post(
+    f"{BASE}/realtime/translations/calls",
+    headers={"Authorization": f"Bearer {mint.json()['value']}",
+             "Content-Type": "application/sdp"},
+    content=offer,
 )
 ```
 
@@ -75,26 +73,25 @@ The **static/index.html** file manages the native browser *WebRTC* handshake. In
 
 The application captures your microphone stream and binds it directly to the peer connection:
 
-``` Python
-mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-mediaStream.getTracks().forEach(t => peerConnection.addTrack(t, mediaStream));
+``` JavaScript
+stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+pc.addTrack(stream.getAudioTracks()[0], stream);
 ```
 
 It establishes a WebRTC `RTCPeerConnection` and automatically pipes the remote translated voice track directly into an HTML5 `<audio>` element:
 
-``` Python
-peerConnection.ontrack = (event) => {
-    audioElement.srcObject = event.streams[0];
-};
+``` JavaScript
+pc.ontrack = (e) => audioEl.srcObject = e.streams[0];
 ```
 
 Text transcripts are handled over a `realtime-channel` WebRTC data channel:
 
-``` Python
-dataChannel.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.type === 'session.output_transcript.delta' && currentParagraphBlock) {
-        currentParagraphBlock.appendChild(document.createTextNode(data.delta));
+``` JavaScript
+channel.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'session.output_transcript.delta') {
+        transcript.textContent += msg.delta;
+        transcript.scrollTop = transcript.scrollHeight;
     }
 };
 ```
