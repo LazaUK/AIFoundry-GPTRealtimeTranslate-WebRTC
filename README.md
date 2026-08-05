@@ -44,7 +44,7 @@ pip install fastapi uvicorn httpx azure-identity
 ```
 
 ## Part 2: Backend Implementation
-The **app.py** file acts as an intermediate proxy between your client browser and Microsoft Foundry. This implementation utilises *WebRTC* instead of raw *WebSockets*, and enables a fallback authentication.
+The **app.py** file acts as an intermediate proxy between your client browser and Microsoft Foundry. This implementation utilises *WebRTC* instead of raw *WebSockets*, with secure *Entra ID* authentication via `DefaultAzureCredential`.
 
 First, it obtains your *Entra ID* token:
 
@@ -99,7 +99,7 @@ channel.onmessage = (e) => {
 ## Part 4: Running the Demo
 
 ### 4.1 Launch the Server
-Ensure that **index.html** file is nested inside the **static/** folder alongside your **app.py** execution layer. Then launch the local app's Python stack using your terminal:
+Ensure that **index.html** file is nested inside the **static/** subfolder, with **app.py** sitting one level above it at the solution's root. Then launch the local app's Python stack using your terminal:
 
 ``` PowerShell
 python app.py
